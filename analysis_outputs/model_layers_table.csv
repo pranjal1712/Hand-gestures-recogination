@@ -1,0 +1,6 @@
+layer_idx,layer_name,layer_type,output_shape,trainable,params
+0,dense,Dense,unknown,True,8192
+1,dropout,Dropout,unknown,True,0
+2,dense_1,Dense,unknown,True,16512
+3,dropout_1,Dropout,unknown,True,0
+4,dense_2,Dense,unknown,True,3483

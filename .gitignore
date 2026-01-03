@@ -1,0 +1,14 @@
+# Virtual Environments
+.venv/
+.venv310/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+
+# Build artifacts
+build/

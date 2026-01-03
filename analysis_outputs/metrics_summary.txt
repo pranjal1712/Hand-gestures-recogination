@@ -1,0 +1,2 @@
+Test accuracy: 1.0000
+Samples test: 1640
