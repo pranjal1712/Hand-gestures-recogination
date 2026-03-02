@@ -15,17 +15,15 @@ if 'debug_info' not in st.session_state:
 # --- Robust Imports ---
 try:
     import mediapipe as mp
-    # Diagnostic: what is inside mp?
-    mp_dir = dir(mp)
-    from mediapipe.solutions import hands as mp_hands
-    from mediapipe.solutions import drawing_utils as mp_drawing
+    try:
+        from mediapipe.solutions import hands as mp_hands
+        from mediapipe.solutions import drawing_utils as mp_drawing
+    except (ImportError, AttributeError):
+        import mediapipe.python.solutions.hands as mp_hands
+        import mediapipe.python.solutions.drawing_utils as mp_drawing
 except Exception as e:
     st.error(f"Critical: Mediapipe Setup Failed. {st.session_state.debug_info}")
     st.error(f"Error Details: {e}")
-    try:
-        st.write(f"Diagnostic - Mediapipe internals: {dir(mp)}")
-    except:
-        pass
     st.info("Tip: Delete and Re-Deploy the app to clear the persistent environment cache.")
     st.stop()
 
@@ -35,13 +33,15 @@ except ImportError:
     st.error("Critical: 'streamlit-webrtc' is missing. Please check requirements.txt.")
     st.stop()
 
+# --- TFLite Engine Import ---
 try:
-    from tflite_runtime.interpreter import Interpreter
+    import tflite_runtime.interpreter as tflite
+    Interpreter = tflite.Interpreter
 except ImportError:
     try:
         from tensorflow.lite.python.interpreter import Interpreter
     except ImportError:
-        st.error("Critical: TensorFlow/TFLite Interpreter not found.")
+        st.error("Critical: TFLite Engine (tflite-runtime or tensorflow) not found.")
         st.stop()
 
 # --- Configuration ---
