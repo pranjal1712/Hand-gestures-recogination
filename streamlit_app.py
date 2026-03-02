@@ -15,33 +15,33 @@ if 'debug_info' not in st.session_state:
 # --- Robust Imports ---
 try:
     import mediapipe as mp
+    # Ultra-robust submodule loading
+    import mediapipe.python.solutions.hands as mp_hands
+    import mediapipe.python.solutions.drawing_utils as mp_drawing
+except Exception as e:
     try:
         from mediapipe.solutions import hands as mp_hands
         from mediapipe.solutions import drawing_utils as mp_drawing
-    except (ImportError, AttributeError):
-        import mediapipe.python.solutions.hands as mp_hands
-        import mediapipe.python.solutions.drawing_utils as mp_drawing
-except Exception as e:
-    st.error(f"Critical: Mediapipe Setup Failed. {st.session_state.debug_info}")
-    st.error(f"Error Details: {e}")
-    st.info("Tip: Delete and Re-Deploy the app to clear the persistent environment cache.")
-    st.stop()
+    except Exception as e2:
+        st.error(f"Critical Error: Mediapipe components could not be loaded.")
+        st.write(f"Direct Error: {e}")
+        st.write(f"Fallback Error: {e2}")
+        st.stop()
 
 try:
     from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode
 except ImportError:
-    st.error("Critical: 'streamlit-webrtc' is missing. Please check requirements.txt.")
+    st.error("Missing dependency: 'streamlit-webrtc'. Please check requirements.txt.")
     st.stop()
 
 # --- TFLite Engine Import ---
 try:
-    import tflite_runtime.interpreter as tflite
-    Interpreter = tflite.Interpreter
+    from tensorflow.lite.python.interpreter import Interpreter
 except ImportError:
     try:
-        from tensorflow.lite.python.interpreter import Interpreter
+        from tflite_runtime.interpreter import Interpreter
     except ImportError:
-        st.error("Critical: TFLite Engine (tflite-runtime or tensorflow) not found.")
+        st.error("Critical: TensorFlow/TFLite Engine missing.")
         st.stop()
 
 # --- Configuration ---
