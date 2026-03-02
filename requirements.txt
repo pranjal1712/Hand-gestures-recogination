@@ -1,6 +1,5 @@
-flask
-opencv-python
-numpy
-mediapipe
-tflite-runtime
 streamlit
+mediapipe
+tensorflow-cpu
+numpy
+opencv-python-headless
