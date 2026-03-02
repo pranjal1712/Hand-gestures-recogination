@@ -1,29 +1,52 @@
 import streamlit as st
 import cv2
 import numpy as np
-import mediapipe as mp
 import time
-from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode
 import threading
+import os
+
+# --- Robust Imports ---
+try:
+    import mediapipe as mp
+    from mediapipe.python.solutions import hands as mp_hands
+    from mediapipe.python.solutions import drawing_utils as mp_drawing
+except Exception as e:
+    st.error(f"Critical: Failed to import Mediapipe: {e}")
+    st.stop()
+
+try:
+    from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode
+except ImportError:
+    st.error("Critical: 'streamlit-webrtc' is missing. Please check requirements.txt.")
+    st.stop()
 
 try:
     from tflite_runtime.interpreter import Interpreter
 except ImportError:
-    from tensorflow.lite.python.interpreter import Interpreter
+    try:
+        from tensorflow.lite.python.interpreter import Interpreter
+    except ImportError:
+        st.error("Critical: TensorFlow/TFLite Interpreter not found.")
+        st.stop()
 
 # --- Configuration ---
 MODEL_PATH = "model/asl_landmark_model.tflite"
 LABEL_PATH = "model/label_map.npy"
 STABILITY_THRESHOLD = 5
 CONFIDENCE_THRESHOLD = 0.8
-COOLDOWN_TIME = 1.0  # seconds
+COOLDOWN_TIME = 1.0
 
 # --- Page Config ---
 st.set_page_config(
-    page_title="ASL Hand Gesture Recognition",
+    page_title="ASL Gesture Flow AI",
     page_icon="🖐️",
     layout="wide"
 )
+
+# --- Check Files ---
+if not os.path.exists(MODEL_PATH) or not os.path.exists(LABEL_PATH):
+    st.error(f"Critical: Model files missing at {MODEL_PATH} or {LABEL_PATH}")
+    st.stop()
 
 # --- Session State ---
 if 'sentence' not in st.session_state:
@@ -33,90 +56,45 @@ if 'sentence' not in st.session_state:
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Inter:wght@300;400;600&display=swap');
-
-    .stApp {
-        background-color: #0e1117;
-        color: #e0e0e0;
-        font-family: 'Inter', sans-serif;
-    }
-    
-    .glass-container {
-        background: rgba(255, 255, 255, 0.05);
-        backdrop-filter: blur(10px);
-        border-radius: 20px;
-        padding: 25px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        margin-bottom: 20px;
-    }
-    
-    .main-title {
-        font-family: 'Orbitron', sans-serif;
-        font-size: clamp(2rem, 5vw, 3.5rem);
-        background: linear-gradient(90deg, #00C9FF 0%, #92FE9D 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        text-align: center;
-        margin-bottom: 2rem;
-        font-weight: 700;
-    }
-    
-    .sentence-box {
-        background: rgba(0, 0, 0, 0.4);
-        border: 1px solid #4CAF50;
-        padding: 20px;
-        border-radius: 15px;
-        min-height: 100px;
-        font-size: clamp(1.5rem, 4vw, 2.5rem);
-        color: #92FE9D;
-        font-family: 'Orbitron', sans-serif;
-        text-align: center;
-        margin-top: 20px;
-        box-shadow: 0 0 20px rgba(76, 175, 80, 0.2);
-        word-wrap: break-word;
-    }
-
-    .prediction-panel {
-        text-align: center;
-        padding: 20px;
-        background: rgba(255, 255, 255, 0.03);
-        border-radius: 15px;
-        border-left: 5px solid #00C9FF;
-    }
+    .stApp { background-color: #0e1117; color: #e0e0e0; font-family: 'Inter', sans-serif; }
+    .glass-container { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(10px); border-radius: 20px; padding: 25px; border: 1px solid rgba(255, 255, 255, 0.1); margin-bottom: 20px; }
+    .main-title { font-family: 'Orbitron', sans-serif; font-size: clamp(2rem, 5vw, 3rem); background: linear-gradient(90deg, #00C9FF 0%, #92FE9D 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; text-align: center; margin-bottom: 1.5rem; font-weight: 700; }
+    .sentence-box { background: rgba(0, 0, 0, 0.4); border: 1px solid #4CAF50; padding: 20px; border-radius: 15px; min-height: 80px; font-size: 1.8rem; color: #92FE9D; font-family: 'Orbitron', sans-serif; text-align: center; margin-top: 15px; word-wrap: break-word; }
+    .status-panel { text-align: center; padding: 15px; background: rgba(255, 255, 255, 0.03); border-radius: 12px; border-left: 4px solid #00C9FF; margin-bottom: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- Load Model ---
-@st.cache_resource
-def load_model_and_labels():
-    interpreter = Interpreter(MODEL_PATH)
-    interpreter.allocate_tensors()
-    input_details = interpreter.get_input_details()[0]
-    output_details = interpreter.get_output_details()[0]
-    labels = np.load(LABEL_PATH, allow_pickle=True)
-    return interpreter, input_details, output_details, labels
-
-model_resources = load_model_and_labels()
-interpreter, input_details, output_details, labels = model_resources
-
-# --- Mediapipe Setup ---
-# Using explicit submodule imports to avoid 'solutions' attribute error
-import mediapipe.python.solutions.hands as mp_hands
-import mediapipe.python.solutions.drawing_utils as mp_drawing
-
-# --- Shared State for WebRTC ---
-class SharedState:
+# --- Global Shared State ---
+class GlobalState:
     def __init__(self):
         self.gesture = "NONE"
         self.confidence = 0.0
-        self.last_appended_gesture = None
+        self.last_char = None
         self.stable_count = 0
-        self.last_append_time = 0
+        self.last_ts = 0
         self.lock = threading.Lock()
 
-shared_state = SharedState()
+if 'global_state' not in st.session_state:
+    st.session_state.global_state = GlobalState()
 
-# --- WebRTC Processor ---
-class VideoProcessor(VideoProcessorBase):
+# --- Load Model ---
+@st.cache_resource
+def load_engine():
+    try:
+        interpreter = Interpreter(MODEL_PATH)
+        interpreter.allocate_tensors()
+        input_details = interpreter.get_input_details()[0]
+        output_details = interpreter.get_output_details()[0]
+        labels = np.load(LABEL_PATH, allow_pickle=True)
+        return interpreter, input_details, output_details, labels
+    except Exception as e:
+        st.error(f"Engine Load Failed: {e}")
+        return None
+
+engine = load_engine()
+
+# --- Processor Class ---
+class ASLProcessor(VideoProcessorBase):
     def __init__(self):
         self.hands = mp_hands.Hands(
             static_image_mode=False,
@@ -127,19 +105,18 @@ class VideoProcessor(VideoProcessorBase):
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
-        
-        # Process Frame
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         result = self.hands.process(rgb)
         
-        local_gesture = "NONE"
-        local_conf = 0.0
+        best_gesture = "NONE"
+        best_conf = 0.0
         
-        if result.multi_hand_landmarks:
+        if result.multi_hand_landmarks and engine:
+            interpreter, input_details, output_details, labels = engine
             for hand_lms in result.multi_hand_landmarks:
                 mp_drawing.draw_landmarks(img, hand_lms, mp_hands.HAND_CONNECTIONS)
                 
-                # Predict
+                # Extract and Predict
                 vec = []
                 for lm in hand_lms.landmark:
                     vec.extend([lm.x, lm.y, lm.z])
@@ -149,80 +126,71 @@ class VideoProcessor(VideoProcessorBase):
                 interpreter.invoke()
                 probs = interpreter.get_tensor(output_details["index"])[0]
                 idx = np.argmax(probs)
-                local_gesture = labels[idx]
-                local_conf = float(probs[idx])
+                best_gesture = labels[idx]
+                best_conf = float(probs[idx])
 
-        # Update Shared State
-        with shared_state.lock:
-            shared_state.gesture = local_gesture
-            shared_state.confidence = local_conf
+        # Write to Shared State
+        gs = st.session_state.global_state
+        with gs.lock:
+            gs.gesture = best_gesture
+            gs.confidence = best_conf
             
-            # Sentence Building Logic inside Processor (Thread Safe)
-            if local_conf > CONFIDENCE_THRESHOLD:
-                if local_gesture == shared_state.last_appended_gesture:
-                    shared_state.stable_count += 1
+            # Sentence Logic
+            if best_conf > CONFIDENCE_THRESHOLD:
+                if best_gesture == gs.last_char:
+                    gs.stable_count += 1
                 else:
-                    shared_state.last_appended_gesture = local_gesture
-                    shared_state.stable_count = 1
+                    gs.last_char = best_gesture
+                    gs.stable_count = 1
                 
-                if shared_state.stable_count >= STABILITY_THRESHOLD:
+                if gs.stable_count >= STABILITY_THRESHOLD:
                     now = time.time()
-                    if now - shared_state.last_append_time > COOLDOWN_TIME:
-                        char = local_gesture.upper()
-                        if char == "SPACE": char = " "
+                    if now - gs.last_ts > COOLDOWN_TIME:
+                        char = best_gesture.upper() if best_gesture.upper() != "SPACE" else " "
                         st.session_state.sentence += char
-                        shared_state.last_append_time = now
-                        shared_state.stable_count = 0
+                        gs.last_ts = now
+                        gs.stable_count = 0
             else:
-                shared_state.stable_count = 0
+                gs.stable_count = 0
 
         return frame.from_ndarray(img, format="bgr24")
 
-# --- Main UI ---
-st.markdown('<div class="main-title">🖐️ GESTURE-FLOW AI</div>', unsafe_allow_html=True)
+# --- UI Layout ---
+st.markdown('<div class="main-title">🖐️ ASL GESTURE FLOW</div>', unsafe_allow_html=True)
+col_left, col_right = st.columns([1.5, 1])
 
-col1, col2 = st.columns([1.6, 1])
-
-with col1:
+with col_left:
     st.markdown('<div class="glass-container">', unsafe_allow_html=True)
-    st.markdown("### 📽️ NEURAL VISION (Cloud Camera)")
-    
-    webrtc_ctx = webrtc_streamer(
-        key="gesture-recognition",
+    ctx = webrtc_streamer(
+        key="asl-flow",
         mode=WebRtcMode.SENDRECV,
-        video_processor_factory=VideoProcessor,
+        video_processor_factory=ASLProcessor,
         async_processing=True,
-        rtc_configuration={
-            "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
-        },
+        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
         media_stream_constraints={"video": True, "audio": False}
     )
     st.markdown('</div>', unsafe_allow_html=True)
 
-with col2:
+with col_right:
     st.markdown('<div class="glass-container">', unsafe_allow_html=True)
-    st.markdown("### 📊 STATUS")
+    st.markdown("### 🔍 Live Inference")
+    gs = st.session_state.global_state
     
-    gesture_placeholder = st.empty()
-    confidence_placeholder = st.empty()
+    st.markdown(f'<div class="status-panel">Gesture: <b>{gs.gesture}</b></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="status-panel">Confidence: <b>{gs.confidence:.1%}</b></div>', unsafe_allow_html=True)
     
     st.markdown("---")
-    st.markdown("### ✏️ SENTENCE")
+    st.markdown("### 📝 Output")
     
-    b1, b2, b3 = st.columns(3)
-    if b1.button("Space ␣"): st.session_state.sentence += " "
-    if b2.button("⌫"): st.session_state.sentence = st.session_state.sentence[:-1]
-    if b3.button("🗑️", type="primary"): st.session_state.sentence = ""
-    
-    sentence_placeholder = st.empty()
+    b_col1, b_col2 = st.columns(2)
+    if b_col1.button("Backspace ⌫", use_container_width=True):
+        st.session_state.sentence = st.session_state.sentence[:-1]
+    if b_col2.button("Clear 🗑️", type="primary", use_container_width=True):
+        st.session_state.sentence = ""
+        
+    st.markdown(f'<div class="sentence-box">{st.session_state.sentence}</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# Update UI from Shared State
-if webrtc_ctx.state.playing:
-    with shared_state.lock:
-        gesture_placeholder.markdown(f'<div class="prediction-panel"><h4>Gesture</h4><h2>{shared_state.gesture}</h2></div>', unsafe_allow_html=True)
-        confidence_placeholder.markdown(f'<div class="prediction-panel"><h4>Confidence</h4><h2>{shared_state.confidence:.1%}</h2></div>', unsafe_allow_html=True)
-    sentence_placeholder.markdown(f'<div class="sentence-box">{st.session_state.sentence}</div>', unsafe_allow_html=True)
-    st.rerun() # Refresh to update session state changes from processor
-else:
-    st.info("Start the WebRTC stream to begin detection.")
+if ctx.state.playing:
+    time.sleep(0.1)
+    st.rerun()
