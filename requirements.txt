@@ -1,5 +1,5 @@
 streamlit
-mediapipe==0.10.11
-tensorflow-cpu
+mediapipe
 numpy
 opencv-python-headless
+tflite-runtime
