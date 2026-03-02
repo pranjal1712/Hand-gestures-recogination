@@ -5,43 +5,28 @@ import time
 import threading
 import os
 
-import sys
-import os
-
-# --- System Debug Info ---
-if 'debug_info' not in st.session_state:
-    st.session_state.debug_info = f"Python: {sys.version} | OS: {sys.platform}"
-
-# --- Robust Imports ---
+# --- Core AI Imports ---
 try:
     import mediapipe as mp
-    # Ultra-robust submodule loading
-    import mediapipe.python.solutions.hands as mp_hands
-    import mediapipe.python.solutions.drawing_utils as mp_drawing
-except Exception as e:
-    try:
-        from mediapipe.solutions import hands as mp_hands
-        from mediapipe.solutions import drawing_utils as mp_drawing
-    except Exception as e2:
-        st.error(f"Critical Error: Mediapipe components could not be loaded.")
-        st.write(f"Direct Error: {e}")
-        st.write(f"Fallback Error: {e2}")
-        st.stop()
+    from mediapipe.solutions import hands as mp_hands
+    from mediapipe.solutions import drawing_utils as mp_drawing
+except ImportError as e:
+    st.error(f"Environmental Error: Mediapipe failed to load. {e}")
+    st.stop()
 
 try:
     from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode
 except ImportError:
-    st.error("Missing dependency: 'streamlit-webrtc'. Please check requirements.txt.")
+    st.error("Dependency Error: 'streamlit-webrtc' not found. Please check requirements.txt.")
     st.stop()
 
-# --- TFLite Engine Import ---
 try:
     from tensorflow.lite.python.interpreter import Interpreter
 except ImportError:
     try:
         from tflite_runtime.interpreter import Interpreter
     except ImportError:
-        st.error("Critical: TensorFlow/TFLite Engine missing.")
+        st.error("Critical: TFLite Engine missing (TensorFlow or tflite-runtime).")
         st.stop()
 
 # --- Configuration ---
@@ -49,38 +34,76 @@ MODEL_PATH = "model/asl_landmark_model.tflite"
 LABEL_PATH = "model/label_map.npy"
 STABILITY_THRESHOLD = 5
 CONFIDENCE_THRESHOLD = 0.8
-COOLDOWN_TIME = 1.0
+COOLDOWN_TIME = 1.2
 
-# --- Page Config ---
+# --- App Settings ---
 st.set_page_config(
-    page_title="ASL Gesture Flow AI",
+    page_title="Gesture Flow AI",
     page_icon="🖐️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
-# --- Check Files ---
+# --- Check Assets ---
 if not os.path.exists(MODEL_PATH) or not os.path.exists(LABEL_PATH):
-    st.error(f"Critical: Model files missing at {MODEL_PATH} or {LABEL_PATH}")
+    st.error(f"Critical Error: Required assets (model/labels) are missing in the repository.")
     st.stop()
 
-# --- Session State ---
-if 'sentence' not in st.session_state:
-    st.session_state.sentence = ""
-
-# --- CSS Styling ---
+# --- Style ---
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Inter:wght@300;400;600&display=swap');
-    .stApp { background-color: #0e1117; color: #e0e0e0; font-family: 'Inter', sans-serif; }
-    .glass-container { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(10px); border-radius: 20px; padding: 25px; border: 1px solid rgba(255, 255, 255, 0.1); margin-bottom: 20px; }
-    .main-title { font-family: 'Orbitron', sans-serif; font-size: clamp(2rem, 5vw, 3rem); background: linear-gradient(90deg, #00C9FF 0%, #92FE9D 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; text-align: center; margin-bottom: 1.5rem; font-weight: 700; }
-    .sentence-box { background: rgba(0, 0, 0, 0.4); border: 1px solid #4CAF50; padding: 20px; border-radius: 15px; min-height: 80px; font-size: 1.8rem; color: #92FE9D; font-family: 'Orbitron', sans-serif; text-align: center; margin-top: 15px; word-wrap: break-word; }
-    .status-panel { text-align: center; padding: 15px; background: rgba(255, 255, 255, 0.03); border-radius: 12px; border-left: 4px solid #00C9FF; margin-bottom: 10px; }
+    
+    .stApp { background-color: #0d1117; color: #f0f0f0; font-family: 'Inter', sans-serif; }
+    
+    .glass-card {
+        background: rgba(255, 255, 255, 0.03);
+        backdrop-filter: blur(12px);
+        border-radius: 20px;
+        padding: 24px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        margin-bottom: 20px;
+    }
+    
+    .hero-title {
+        font-family: 'Orbitron', sans-serif;
+        font-size: clamp(1.8rem, 5vw, 3.2rem);
+        background: linear-gradient(135deg, #00d2ff 0%, #3a7bd5 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        text-align: center;
+        margin-bottom: 1.5rem;
+        letter-spacing: 2px;
+    }
+    
+    .sentence-display {
+        background: rgba(0, 0, 0, 0.5);
+        border-radius: 12px;
+        padding: 24px;
+        font-family: 'Orbitron', sans-serif;
+        font-size: clamp(1.4rem, 4vw, 2.2rem);
+        color: #00ffcc;
+        text-align: center;
+        min-height: 80px;
+        border: 1px solid #00ffcc44;
+        box-shadow: inset 0 0 15px rgba(0, 255, 204, 0.1);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-top: 10px;
+    }
+    
+    .stat-label { color: #8899ac; font-size: 0.9rem; margin-bottom: 4px; }
+    .stat-value { font-family: 'Orbitron', sans-serif; font-size: 1.4rem; color: #00d2ff; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- Global Shared State ---
-class GlobalState:
+# --- State Management ---
+if 'sentence' not in st.session_state:
+    st.session_state.sentence = ""
+
+class InferenceState:
     def __init__(self):
         self.gesture = "NONE"
         self.confidence = 0.0
@@ -89,30 +112,27 @@ class GlobalState:
         self.last_ts = 0
         self.lock = threading.Lock()
 
-if 'global_state' not in st.session_state:
-    st.session_state.global_state = GlobalState()
+if 'inference_state' not in st.session_state:
+    st.session_state.inference_state = InferenceState()
 
-# --- Load Model ---
+# --- Model Engine ---
 @st.cache_resource
-def load_engine():
-    try:
-        interpreter = Interpreter(MODEL_PATH)
-        interpreter.allocate_tensors()
-        input_details = interpreter.get_input_details()[0]
-        output_details = interpreter.get_output_details()[0]
-        labels = np.load(LABEL_PATH, allow_pickle=True)
-        return interpreter, input_details, output_details, labels
-    except Exception as e:
-        st.error(f"Engine Load Failed: {e}")
-        return None
+def init_engine():
+    interpreter = Interpreter(MODEL_PATH)
+    interpreter.allocate_tensors()
+    return {
+        'itp': interpreter,
+        'inp': interpreter.get_input_details()[0],
+        'out': interpreter.get_output_details()[0],
+        'lbl': np.load(LABEL_PATH, allow_pickle=True)
+    }
 
-engine = load_engine()
+engine = init_engine()
 
-# --- Processor Class ---
-class ASLProcessor(VideoProcessorBase):
+# --- Frame Processor ---
+class HandProcessor(VideoProcessorBase):
     def __init__(self):
         self.hands = mp_hands.Hands(
-            static_image_mode=False,
             max_num_hands=1,
             min_detection_confidence=0.7,
             min_tracking_confidence=0.7
@@ -123,89 +143,87 @@ class ASLProcessor(VideoProcessorBase):
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         result = self.hands.process(rgb)
         
-        best_gesture = "NONE"
-        best_conf = 0.0
+        pred_gesture = "NONE"
+        pred_conf = 0.0
         
-        if result.multi_hand_landmarks and engine:
-            interpreter, input_details, output_details, labels = engine
-            for hand_lms in result.multi_hand_landmarks:
-                mp_drawing.draw_landmarks(img, hand_lms, mp_hands.HAND_CONNECTIONS)
-                
-                # Extract and Predict
-                vec = []
-                for lm in hand_lms.landmark:
-                    vec.extend([lm.x, lm.y, lm.z])
-                inp = np.array(vec, dtype=np.float32).reshape(1, -1)
-                
-                interpreter.set_tensor(input_details["index"], inp)
-                interpreter.invoke()
-                probs = interpreter.get_tensor(output_details["index"])[0]
-                idx = np.argmax(probs)
-                best_gesture = labels[idx]
-                best_conf = float(probs[idx])
-
-        # Write to Shared State
-        gs = st.session_state.global_state
-        with gs.lock:
-            gs.gesture = best_gesture
-            gs.confidence = best_conf
+        if result.multi_hand_landmarks:
+            h_lms = result.multi_hand_landmarks[0]
+            mp_drawing.draw_landmarks(img, h_lms, mp_hands.HAND_CONNECTIONS)
             
-            # Sentence Logic
-            if best_conf > CONFIDENCE_THRESHOLD:
-                if best_gesture == gs.last_char:
-                    gs.stable_count += 1
+            # Predict
+            vec = [coord for lm in h_lms.landmark for coord in (lm.x, lm.y, lm.z)]
+            inp_data = np.array(vec, dtype=np.float32).reshape(1, -1)
+            
+            engine['itp'].set_tensor(engine['inp']["index"], inp_data)
+            engine['itp'].invoke()
+            probs = engine['itp'].get_tensor(engine['out']["index"])[0]
+            idx = np.argmax(probs)
+            pred_gesture = engine['lbl'][idx]
+            pred_conf = float(probs[idx])
+
+        # Push to Shared State
+        is_state = st.session_state.inference_state
+        with is_state.lock:
+            is_state.gesture = pred_gesture
+            is_state.confidence = pred_conf
+            
+            if pred_conf > CONFIDENCE_THRESHOLD:
+                if pred_gesture == is_state.last_char:
+                    is_state.stable_count += 1
                 else:
-                    gs.last_char = best_gesture
-                    gs.stable_count = 1
+                    is_state.last_char = pred_gesture
+                    is_state.stable_count = 1
                 
-                if gs.stable_count >= STABILITY_THRESHOLD:
+                if is_state.stable_count >= STABILITY_THRESHOLD:
                     now = time.time()
-                    if now - gs.last_ts > COOLDOWN_TIME:
-                        char = best_gesture.upper() if best_gesture.upper() != "SPACE" else " "
+                    if now - is_state.last_ts > COOLDOWN_TIME:
+                        char = pred_gesture.upper() if pred_gesture.upper() != "SPACE" else " "
                         st.session_state.sentence += char
-                        gs.last_ts = now
-                        gs.stable_count = 0
+                        is_state.last_ts = now
+                        is_state.stable_count = 0
             else:
-                gs.stable_count = 0
+                is_state.stable_count = 0
 
         return frame.from_ndarray(img, format="bgr24")
 
-# --- UI Layout ---
-st.markdown('<div class="main-title">🖐️ ASL GESTURE FLOW</div>', unsafe_allow_html=True)
-col_left, col_right = st.columns([1.5, 1])
+# --- Layout ---
+st.markdown('<h1 class="hero-title">GESTURE FLOW AI</h1>', unsafe_allow_html=True)
 
-with col_left:
-    st.markdown('<div class="glass-container">', unsafe_allow_html=True)
-    ctx = webrtc_streamer(
-        key="asl-flow",
+v_col, i_col = st.columns([1.6, 1])
+
+with v_col:
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    webrtc_streamer(
+        key="asl-main",
         mode=WebRtcMode.SENDRECV,
-        video_processor_factory=ASLProcessor,
+        video_processor_factory=HandProcessor,
         async_processing=True,
         rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
         media_stream_constraints={"video": True, "audio": False}
     )
     st.markdown('</div>', unsafe_allow_html=True)
 
-with col_right:
-    st.markdown('<div class="glass-container">', unsafe_allow_html=True)
-    st.markdown("### 🔍 Live Inference")
-    gs = st.session_state.global_state
+with i_col:
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.subheader("📡 Live Analytics")
+    is_state = st.session_state.inference_state
     
-    st.markdown(f'<div class="status-panel">Gesture: <b>{gs.gesture}</b></div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="status-panel">Confidence: <b>{gs.confidence:.1%}</b></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="stat-label">DETECTED GESTURE</div><div class="stat-value">{is_state.gesture}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="stat-label">CONFIDENCE SCORE</div><div class="stat-value">{is_state.confidence:.1%}</div>', unsafe_allow_html=True)
     
-    st.markdown("---")
-    st.markdown("### 📝 Output")
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.subheader("⌨️ Composition")
     
-    b_col1, b_col2 = st.columns(2)
-    if b_col1.button("Backspace ⌫", use_container_width=True):
+    ctrl1, ctrl2 = st.columns(2)
+    if ctrl1.button("Delete char ⌫", use_container_width=True):
         st.session_state.sentence = st.session_state.sentence[:-1]
-    if b_col2.button("Clear 🗑️", type="primary", use_container_width=True):
+    if ctrl2.button("Reset All 🗑️", type="primary", use_container_width=True):
         st.session_state.sentence = ""
         
-    st.markdown(f'<div class="sentence-box">{st.session_state.sentence}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="sentence-display">{st.session_state.sentence}</div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-if ctx.state.playing:
+# Loop to sync state changes from thread
+if st.session_state.get("asl-main_playing", False):
     time.sleep(0.1)
     st.rerun()
