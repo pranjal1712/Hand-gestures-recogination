@@ -1,3 +1,14 @@
+---
+title: Gesture Flow AI
+emoji: 🖐️
+colorFrom: blue
+colorTo: green
+sdk: streamlit
+sdk_version: 1.31.1
+app_file: streamlit_app.py
+pinned: false
+---
+
 # 🖐️ Gesture-Flow AI: Hand Gesture Recognition
 
 A premium, responsive, and real-time hand gesture recognition system built with **Streamlit**, **MediaPipe**, and **TensorFlow-CPU**.
