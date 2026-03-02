@@ -15,16 +15,18 @@ if 'debug_info' not in st.session_state:
 # --- Robust Imports ---
 try:
     import mediapipe as mp
+    # Diagnostic: what is inside mp?
+    mp_dir = dir(mp)
     from mediapipe.solutions import hands as mp_hands
     from mediapipe.solutions import drawing_utils as mp_drawing
-    
-    # Verify solutions are actually there
-    _ = mp_hands.Hands
-    _ = mp_drawing.draw_landmarks
 except Exception as e:
     st.error(f"Critical: Mediapipe Setup Failed. {st.session_state.debug_info}")
     st.error(f"Error Details: {e}")
-    st.info("Tip: Try to 'Reboot App' from the Streamlit Cloud menu to clear the cache.")
+    try:
+        st.write(f"Diagnostic - Mediapipe internals: {dir(mp)}")
+    except:
+        pass
+    st.info("Tip: Delete and Re-Deploy the app to clear the persistent environment cache.")
     st.stop()
 
 try:
