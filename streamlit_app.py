@@ -5,13 +5,27 @@ import time
 import threading
 import os
 
+import sys
+import os
+
+# --- System Debug Info ---
+if 'debug_info' not in st.session_state:
+    st.session_state.debug_info = f"Python: {sys.version} | OS: {sys.platform}"
+
 # --- Robust Imports ---
 try:
     import mediapipe as mp
-    from mediapipe.python.solutions import hands as mp_hands
-    from mediapipe.python.solutions import drawing_utils as mp_drawing
+    # Try multiple ways to get solutions
+    if hasattr(mp, 'solutions'):
+        mp_hands = mp.solutions.hands
+        mp_drawing = mp.solutions.drawing_utils
+    else:
+        import mediapipe.python.solutions.hands as mp_hands
+        import mediapipe.python.solutions.drawing_utils as mp_drawing
 except Exception as e:
-    st.error(f"Critical: Failed to import Mediapipe: {e}")
+    st.error(f"Critical: Mediapipe Setup Failed. {st.session_state.debug_info}")
+    st.error(f"Error Details: {e}")
+    st.info("Tip: Ensure Python version is 3.11 or 3.12 in Streamlit Settings.")
     st.stop()
 
 try:
