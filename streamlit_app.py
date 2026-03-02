@@ -3,7 +3,8 @@ import cv2
 import numpy as np
 import mediapipe as mp
 import time
-from PIL import Image
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode
+import threading
 
 try:
     from tflite_runtime.interpreter import Interpreter
@@ -17,16 +18,6 @@ STABILITY_THRESHOLD = 5
 CONFIDENCE_THRESHOLD = 0.8
 COOLDOWN_TIME = 1.0  # seconds
 
-# --- Session State Initialization ---
-if 'sentence' not in st.session_state:
-    st.session_state.sentence = ""
-if 'last_gesture' not in st.session_state:
-    st.session_state.last_gesture = None
-if 'stable_count' not in st.session_state:
-    st.session_state.stable_count = 0
-if 'last_append_time' not in st.session_state:
-    st.session_state.last_append_time = 0
-
 # --- Page Config ---
 st.set_page_config(
     page_title="ASL Hand Gesture Recognition",
@@ -34,7 +25,11 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- Premium Dark CSS ---
+# --- Session State ---
+if 'sentence' not in st.session_state:
+    st.session_state.sentence = ""
+
+# --- CSS Styling ---
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Inter:wght@300;400;600&display=swap');
@@ -79,88 +74,109 @@ st.markdown("""
         box-shadow: 0 0 20px rgba(76, 175, 80, 0.2);
         word-wrap: break-word;
     }
-    
-    .prediction-card {
+
+    .prediction-panel {
         text-align: center;
-        padding: clamp(10px, 2vw, 15px);
-        border-radius: 15px;
+        padding: 20px;
         background: rgba(255, 255, 255, 0.03);
+        border-radius: 15px;
         border-left: 5px solid #00C9FF;
-    }
-    
-    .gesture-label {
-        font-size: clamp(2rem, 5vw, 3rem);
-        color: #00C9FF;
-        font-weight: bold;
-    }
-    
-    .confidence-value {
-        font-size: clamp(1rem, 3vw, 1.5rem);
-        color: #888;
-    }
-    
-    /* Responsive Adjustments */
-    @media (max-width: 768px) {
-        .glass-container {
-            padding: 15px;
-        }
-        .main-title {
-            margin-bottom: 1rem;
-        }
-    }
-    
-    /* Button Styling */
-    .stButton>button {
-        width: 100%;
-        border-radius: 10px;
-        border: none;
-        padding: 10px;
-        transition: all 0.3s;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- Load Resources ---
+# --- Load Model ---
 @st.cache_resource
-def load_resources():
-    try:
-        interpreter = Interpreter(MODEL_PATH)
-        interpreter.allocate_tensors()
-        input_details = interpreter.get_input_details()[0]
-        output_details = interpreter.get_output_details()[0]
-        labels = np.load(LABEL_PATH, allow_pickle=True)
-        
-        hands = mp.solutions.hands.Hands(
+def load_model_and_labels():
+    interpreter = Interpreter(MODEL_PATH)
+    interpreter.allocate_tensors()
+    input_details = interpreter.get_input_details()[0]
+    output_details = interpreter.get_output_details()[0]
+    labels = np.load(LABEL_PATH, allow_pickle=True)
+    return interpreter, input_details, output_details, labels
+
+model_resources = load_model_and_labels()
+interpreter, input_details, output_details, labels = model_resources
+
+# --- Mediapipe Setup ---
+# Using explicit submodule imports to avoid 'solutions' attribute error
+import mediapipe.python.solutions.hands as mp_hands
+import mediapipe.python.solutions.drawing_utils as mp_drawing
+
+# --- Shared State for WebRTC ---
+class SharedState:
+    def __init__(self):
+        self.gesture = "NONE"
+        self.confidence = 0.0
+        self.last_appended_gesture = None
+        self.stable_count = 0
+        self.last_append_time = 0
+        self.lock = threading.Lock()
+
+shared_state = SharedState()
+
+# --- WebRTC Processor ---
+class VideoProcessor(VideoProcessorBase):
+    def __init__(self):
+        self.hands = mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=1,
             min_detection_confidence=0.7,
             min_tracking_confidence=0.7
         )
-        mp_drawing = mp.solutions.drawing_utils
-        mp_hands = mp.solutions.hands
+
+    def recv(self, frame):
+        img = frame.to_ndarray(format="bgr24")
         
-        return interpreter, input_details, output_details, labels, hands, mp_drawing, mp_hands
-    except Exception as e:
-        st.error(f"Failed to load resources: {e}")
-        return None
+        # Process Frame
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        result = self.hands.process(rgb)
+        
+        local_gesture = "NONE"
+        local_conf = 0.0
+        
+        if result.multi_hand_landmarks:
+            for hand_lms in result.multi_hand_landmarks:
+                mp_drawing.draw_landmarks(img, hand_lms, mp_hands.HAND_CONNECTIONS)
+                
+                # Predict
+                vec = []
+                for lm in hand_lms.landmark:
+                    vec.extend([lm.x, lm.y, lm.z])
+                inp = np.array(vec, dtype=np.float32).reshape(1, -1)
+                
+                interpreter.set_tensor(input_details["index"], inp)
+                interpreter.invoke()
+                probs = interpreter.get_tensor(output_details["index"])[0]
+                idx = np.argmax(probs)
+                local_gesture = labels[idx]
+                local_conf = float(probs[idx])
 
-resources = load_resources()
-if resources:
-    interpreter, input_details, output_details, labels, hands, mp_drawing, mp_hands = resources
+        # Update Shared State
+        with shared_state.lock:
+            shared_state.gesture = local_gesture
+            shared_state.confidence = local_conf
+            
+            # Sentence Building Logic inside Processor (Thread Safe)
+            if local_conf > CONFIDENCE_THRESHOLD:
+                if local_gesture == shared_state.last_appended_gesture:
+                    shared_state.stable_count += 1
+                else:
+                    shared_state.last_appended_gesture = local_gesture
+                    shared_state.stable_count = 1
+                
+                if shared_state.stable_count >= STABILITY_THRESHOLD:
+                    now = time.time()
+                    if now - shared_state.last_append_time > COOLDOWN_TIME:
+                        char = local_gesture.upper()
+                        if char == "SPACE": char = " "
+                        st.session_state.sentence += char
+                        shared_state.last_append_time = now
+                        shared_state.stable_count = 0
+            else:
+                shared_state.stable_count = 0
 
-# --- Prediction Logic ---
-def get_prediction(landmarks):
-    vec = []
-    for lm in landmarks.landmark:
-        vec.extend([lm.x, lm.y, lm.z])
-    inp = np.array(vec, dtype=np.float32).reshape(1, -1)
-    
-    interpreter.set_tensor(input_details["index"], inp)
-    interpreter.invoke()
-    probs = interpreter.get_tensor(output_details["index"])[0]
-    
-    idx = np.argmax(probs)
-    return labels[idx], float(probs[idx])
+        return frame.from_ndarray(img, format="bgr24")
 
 # --- Main UI ---
 st.markdown('<div class="main-title">🖐️ GESTURE-FLOW AI</div>', unsafe_allow_html=True)
@@ -169,100 +185,44 @@ col1, col2 = st.columns([1.6, 1])
 
 with col1:
     st.markdown('<div class="glass-container">', unsafe_allow_html=True)
-    st.markdown("### 📽️ NEURAL VISION")
+    st.markdown("### 📽️ NEURAL VISION (Cloud Camera)")
     
-    # Sidebar or Sidebar-like options for Camera
-    cam_col1, cam_col2, cam_col3 = st.columns([1, 1, 1])
-    with cam_col1:
-        run_camera = st.checkbox("Engage Camera", value=True)
-    with cam_col2:
-        camera_index = st.number_input("Camera Index", min_value=0, max_value=5, value=0, step=1)
-    with cam_col3:
-        mirror_video = st.toggle("Mirror View", value=True)
-        
-    frame_placeholder = st.empty()
+    webrtc_ctx = webrtc_streamer(
+        key="gesture-recognition",
+        mode=WebRtcMode.SENDRECV,
+        video_processor_factory=VideoProcessor,
+        async_processing=True,
+        rtc_configuration={
+            "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+        },
+        media_stream_constraints={"video": True, "audio": False}
+    )
     st.markdown('</div>', unsafe_allow_html=True)
 
 with col2:
     st.markdown('<div class="glass-container">', unsafe_allow_html=True)
-    st.markdown("### 📊 REAL-TIME INFERENCE")
+    st.markdown("### 📊 STATUS")
     
-    pred_col, conf_col = st.columns(2)
-    with pred_col:
-        st.markdown('<div class="prediction-card">ID</div>', unsafe_allow_html=True)
-        gesture_ui = st.empty()
-    with conf_col:
-        st.markdown('<div class="prediction-card">CONF</div>', unsafe_allow_html=True)
-        confidence_ui = st.empty()
+    gesture_placeholder = st.empty()
+    confidence_placeholder = st.empty()
     
     st.markdown("---")
-    st.markdown("### ✏️ SENTENCE BUILDER")
+    st.markdown("### ✏️ SENTENCE")
     
-    c1, c2, c3 = st.columns(3)
-    if c1.button("Space ␣"):
-        st.session_state.sentence += " "
-    if c2.button("Backspace"):
-        st.session_state.sentence = st.session_state.sentence[:-1]
-    if c3.button("Clear 🗑️", type="primary"):
-        st.session_state.sentence = ""
-        
-    sentence_ui = st.empty()
+    b1, b2, b3 = st.columns(3)
+    if b1.button("Space ␣"): st.session_state.sentence += " "
+    if b2.button("⌫"): st.session_state.sentence = st.session_state.sentence[:-1]
+    if b3.button("🗑️", type="primary"): st.session_state.sentence = ""
+    
+    sentence_placeholder = st.empty()
     st.markdown('</div>', unsafe_allow_html=True)
 
-# --- Processing Loop ---
-if run_camera and resources:
-    cap = cv2.VideoCapture(int(camera_index))
-    
-    while run_camera:
-        ret, frame = cap.read()
-        if not ret: 
-            st.error(f"Failed to access Camera Index {camera_index}. Try another index.")
-            break
-        
-        if mirror_video:
-            frame = cv2.flip(frame, 1)
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = hands.process(rgb)
-        
-        current_gesture = "NONE"
-        current_conf = 0.0
-        
-        if result.multi_hand_landmarks:
-            for hand_lms in result.multi_hand_landmarks:
-                mp_drawing.draw_landmarks(frame, hand_lms, mp_hands.HAND_CONNECTIONS)
-                current_gesture, current_conf = get_prediction(hand_lms)
-                
-                # Stability and Sentence Building Logic
-                if current_conf > CONFIDENCE_THRESHOLD:
-                    if current_gesture == st.session_state.last_gesture:
-                        st.session_state.stable_count += 1
-                    else:
-                        st.session_state.last_gesture = current_gesture
-                        st.session_state.stable_count = 1
-                    
-                    # Logic to append
-                    if st.session_state.stable_count >= STABILITY_THRESHOLD:
-                        now = time.time()
-                        if now - st.session_state.last_append_time > COOLDOWN_TIME:
-                            char_to_add = current_gesture.upper()
-                            if char_to_add == "SPACE": char_to_add = " "
-                            
-                            st.session_state.sentence += char_to_add
-                            st.session_state.last_append_time = now
-                            st.session_state.stable_count = 0 # Reset stability after add
-                else:
-                    st.session_state.stable_count = 0
-
-        # Update Video
-        frame_placeholder.image(frame, channels="BGR", use_container_width=True)
-        
-        # Update UI Elements
-        gesture_ui.markdown(f'<div class="gesture-label">{current_gesture}</div>', unsafe_allow_html=True)
-        confidence_ui.markdown(f'<div class="confidence-value">{current_conf:.1%}</div>', unsafe_allow_html=True)
-        sentence_ui.markdown(f'<div class="sentence-box">{st.session_state.sentence}</div>', unsafe_allow_html=True)
-        
-        time.sleep(0.01)
-        
-    cap.release()
+# Update UI from Shared State
+if webrtc_ctx.state.playing:
+    with shared_state.lock:
+        gesture_placeholder.markdown(f'<div class="prediction-panel"><h4>Gesture</h4><h2>{shared_state.gesture}</h2></div>', unsafe_allow_html=True)
+        confidence_placeholder.markdown(f'<div class="prediction-panel"><h4>Confidence</h4><h2>{shared_state.confidence:.1%}</h2></div>', unsafe_allow_html=True)
+    sentence_placeholder.markdown(f'<div class="sentence-box">{st.session_state.sentence}</div>', unsafe_allow_html=True)
+    st.rerun() # Refresh to update session state changes from processor
 else:
-    st.info("System Standby. Active Camera to proceed.")
+    st.info("Start the WebRTC stream to begin detection.")
