@@ -1,22 +1,36 @@
 FROM python:3.11-slim
 
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PORT=7860
+
 WORKDIR /app
 
-# Install system dependencies for OpenCV and MediaPipe
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
     libgl1-mesa-glx \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy project files
-COPY . .
+# Create a non-root user
+RUN useradd -m -u 1000 user
+USER user
+ENV HOME=/home/user \
+    PATH=/home/user/.local/bin:$PATH
 
-# Install Python requirements
-RUN pip install --no-cache-dir -r requirements.txt
+WORKDIR $HOME/app
 
-# Expose Streamlit port
+# Copy and install requirements first for caching
+COPY --chown=user requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# Copy the rest of the app
+COPY --chown=user . .
+
+# Expose port
 EXPOSE 7860
 
-# Run the application
-ENTRYPOINT ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0"]
+# Command to run
+CMD ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0"]
