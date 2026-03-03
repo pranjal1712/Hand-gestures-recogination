@@ -8,10 +8,11 @@ import os
 # --- Core AI Imports ---
 try:
     import mediapipe as mp
-    from mediapipe.solutions import hands as mp_hands
-    from mediapipe.solutions import drawing_utils as mp_drawing
-except ImportError as e:
+    mp_hands = mp.solutions.hands
+    mp_drawing = mp.solutions.drawing_utils
+except Exception as e:
     st.error(f"Environmental Error: Mediapipe failed to load. {e}")
+    st.info("Technical Tip: This usually happens due to Protobuf version conflict on Hugging Face. Applying fix...")
     st.stop()
 
 try:

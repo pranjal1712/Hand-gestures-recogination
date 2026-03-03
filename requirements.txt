@@ -4,3 +4,4 @@ opencv-python-headless
 tensorflow-cpu
 streamlit-webrtc
 numpy
+protobuf==3.20.3
