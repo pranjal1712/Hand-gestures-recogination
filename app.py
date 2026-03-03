@@ -228,11 +228,21 @@ with v_col:
                 {"urls": ["stun:stun.l.google.com:19302"]},
                 {"urls": ["stun:stun1.l.google.com:19302"]},
                 {"urls": ["stun:stun2.l.google.com:19302"]},
-                {"urls": ["stun:stun3.l.google.com:19302"]},
-                {"urls": ["stun:stun4.l.google.com:19302"]},
             ]
         },
-        media_stream_constraints={"video": True, "audio": False}
+        media_stream_constraints={
+            "video": {
+                "width": {"ideal": 640},
+                "height": {"ideal": 480},
+                "frameRate": {"ideal": 20}
+            },
+            "audio": False
+        },
+        video_html_attrs={
+            "style": {"width": "100%", "margin": "0 auto", "border-radius": "10px"},
+            "controls": False,
+            "autoPlay": True,
+        },
     )
     st.markdown('</div>', unsafe_allow_html=True)
 
