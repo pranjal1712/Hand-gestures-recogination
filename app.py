@@ -214,36 +214,65 @@ class HandProcessor(VideoProcessorBase):
 # --- Layout ---
 st.markdown('<h1 class="hero-title">GESTURE FLOW AI</h1>', unsafe_allow_html=True)
 
+# Connection Warning & Direct Link
+st.info("💡 **Camera Tip**: Agar camera load nahi ho raha, toh isse **Direct Link** par kholiye: [Open Direct App](https://pranjal1712-gesture-flow-ai.hf.space)")
+
 v_col, i_col = st.columns([1.6, 1])
 
 with v_col:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    webrtc_streamer(
-        key="asl-main",
-        mode=WebRtcMode.SENDRECV,
-        video_processor_factory=HandProcessor,
-        async_processing=True,
-        rtc_configuration={
-            "iceServers": [
-                {"urls": ["stun:stun.l.google.com:19302"]},
-                {"urls": ["stun:stun1.l.google.com:19302"]},
-                {"urls": ["stun:stun2.l.google.com:19302"]},
-            ]
-        },
-        media_stream_constraints={
-            "video": {
-                "width": {"ideal": 640},
-                "height": {"ideal": 480},
-                "frameRate": {"ideal": 20}
+    
+    # Mode Selection for users with network issues
+    cam_mode = st.radio("Camera Mode", ["HD Real-time (WebRTC)", "Simple Mode (Fallback)"], horizontal=True, label_visibility="collapsed")
+    
+    if cam_mode == "HD Real-time (WebRTC)":
+        webrtc_streamer(
+            key="asl-main",
+            mode=WebRtcMode.SENDRECV,
+            video_processor_factory=HandProcessor,
+            async_processing=True,
+            rtc_configuration={
+                "iceServers": [
+                    {"urls": ["stun:stun.l.google.com:19302"]},
+                    {"urls": ["stun:stun1.l.google.com:19302"]},
+                    {"urls": ["stun:stun2.l.google.com:19302"]},
+                    {"urls": ["stun:stun3.l.google.com:19302"]},
+                    {"urls": ["stun:stun4.l.google.com:19302"]},
+                ]
             },
-            "audio": False
-        },
-        video_html_attrs={
-            "style": {"width": "100%", "margin": "0 auto", "border-radius": "10px"},
-            "controls": False,
-            "autoPlay": True,
-        },
-    )
+            media_stream_constraints={
+                "video": {"width": {"ideal": 640}, "height": {"ideal": 480}},
+                "audio": False
+            },
+            video_html_attrs={
+                "style": {"width": "100%", "border-radius": "10px"},
+                "controls": False, "autoPlay": True,
+            },
+        )
+    else:
+        # Fallback using standard streamlit camera
+        img_file = st.camera_input("Capture Gesture")
+        if img_file:
+            img = cv2.imdecode(np.frombuffer(img_file.read(), np.uint8), cv2.IMREAD_COLOR)
+            rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            result = mp_hands.Hands(static_image_mode=True).process(rgb)
+            
+            if result.multi_hand_landmarks:
+                h_lms = result.multi_hand_landmarks[0]
+                vec = [coord for lm in h_lms.landmark for coord in (lm.x, lm.y, lm.z)]
+                inp_data = np.array(vec, dtype=np.float32).reshape(1, -1)
+                
+                engine['itp'].set_tensor(engine['inp']["index"], inp_data)
+                engine['itp'].invoke()
+                probs = engine['itp'].get_tensor(engine['out']["index"])[0]
+                idx = np.argmax(probs)
+                
+                char = engine['lbl'][idx].upper() if engine['lbl'][idx].upper() != "SPACE" else " "
+                st.session_state.sentence += char
+                st.success(f"Detected: {engine['lbl'][idx]} ({probs[idx]:.1%})")
+            else:
+                st.warning("No hand detected in photo!")
+                
     st.markdown('</div>', unsafe_allow_html=True)
 
 with i_col:
