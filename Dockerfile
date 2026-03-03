@@ -8,13 +8,14 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # Install system dependencies
+# Note: libgl1 is used instead of libgl1-mesa-glx for better compatibility
 RUN apt-get update && apt-get install -y \
     build-essential \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Create a non-root user
+# Create a non-root user (Hugging Face requirement)
 RUN useradd -m -u 1000 user
 USER user
 ENV HOME=/home/user \
@@ -32,5 +33,5 @@ COPY --chown=user . .
 # Expose port
 EXPOSE 7860
 
-# Command to run
+# Command to run streamlit
 CMD ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0"]
