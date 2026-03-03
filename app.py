@@ -22,10 +22,10 @@ except ImportError:
     st.stop()
 
 try:
-    from tensorflow.lite.python.interpreter import Interpreter
+    from tflite_runtime.interpreter import Interpreter
 except ImportError:
     try:
-        from tflite_runtime.interpreter import Interpreter
+        from tensorflow.lite.python.interpreter import Interpreter
     except ImportError:
         st.error("Critical: TFLite Engine missing (TensorFlow or tflite-runtime).")
         st.stop()
