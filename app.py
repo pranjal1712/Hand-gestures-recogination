@@ -119,8 +119,32 @@ if 'inference_state' not in st.session_state:
 # --- Model Engine ---
 @st.cache_resource
 def init_engine():
-    interpreter = Interpreter(MODEL_PATH)
-    interpreter.allocate_tensors()
+    # Diagnostic Check
+    if not os.path.exists(MODEL_PATH):
+        st.error(f"MODEL NOT FOUND at {os.path.abspath(MODEL_PATH)}")
+        st.stop()
+    
+    m_size = os.path.getsize(MODEL_PATH)
+    if m_size < 1000:
+        st.error(f"CORRUPT MODEL: Size {m_size} bytes (Possible Git LFS Pointer)")
+        st.stop()
+
+    try:
+        interpreter = Interpreter(MODEL_PATH)
+        interpreter.allocate_tensors()
+    except Exception as e:
+        st.error(f"Engine Failure: {str(e)}")
+        st.info("Attempting fallback engine...")
+        try:
+            import tensorflow as tf
+            interpreter = tf.lite.Interpreter(MODEL_PATH)
+            interpreter.allocate_tensors()
+        except Exception as e2:
+            st.error(f"Critical Engine Crash: {e2}")
+            st.write(f"Model Path: {os.path.abspath(MODEL_PATH)}")
+            st.write(f"Debug Info: {m_size} bytes")
+            st.stop()
+
     return {
         'itp': interpreter,
         'inp': interpreter.get_input_details()[0],

@@ -1,7 +1,7 @@
 streamlit
 mediapipe==0.10.11
 opencv-python-headless
-tflite-runtime
+tensorflow-cpu==2.15.0
 streamlit-webrtc
 numpy
 protobuf==3.20.3
