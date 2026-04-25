@@ -1,50 +1,68 @@
-from flask import Flask, render_template, request, jsonify
+import os
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 import numpy as np
-import cv2
-import mediapipe as mp
-from tensorflow.lite.python.interpreter import Interpreter
+import tensorflow as tf
 
 app = Flask(__name__)
+CORS(app)
 
-# Load model
-interpreter = Interpreter("model/asl_landmark_model.tflite")
+# Load the TFLite model and allocate tensors.
+interpreter = tf.lite.Interpreter(model_path="model/asl_landmark_model.tflite")
 interpreter.allocate_tensors()
 
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
-labels = np.load("model/label_map.npy", allow_pickle=True)
+LABELS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'SPACE', 'T', 'U', 'V', 'W', 'X', 'YY', 'Z']
 
-mp_hands = mp.solutions.hands
-hands = mp_hands.Hands(max_num_hands=1)
+DATASET_PATH = "dataset"
 
-@app.route("/")
-def index():
-    return render_template("index.html")
-
-@app.route("/predict", methods=["POST"])
+@app.route('/predict', methods=['POST'])
 def predict():
-    file = request.files["image"]
-    img = cv2.imdecode(np.frombuffer(file.read(), np.uint8), cv2.IMREAD_COLOR)
+    try:
+        data = request.get_json(silent=True) or {}
+        landmarks = data.get('landmarks')
+        
+        if not landmarks or len(landmarks) != 63:
+            return jsonify({'error': 'Invalid landmarks data'}), 400
 
-    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    result = hands.process(rgb)
+        input_data = np.array(landmarks, dtype=np.float32).reshape(1, 63)
+        
+        interpreter.set_tensor(input_details[0]['index'], input_data)
+        interpreter.invoke()
+        
+        output_data = interpreter.get_tensor(output_details[0]['index'])
+        prediction_index = np.argmax(output_data)
+        confidence = float(np.max(output_data))
+        
+        return jsonify({
+            'label': LABELS[prediction_index],
+            'confidence': confidence
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-    if not result.multi_hand_landmarks:
-        return jsonify({"label": "No hand"})
+@app.route('/get_reference', methods=['GET'])
+def get_reference():
+    label = request.args.get('label')
+    if not label or label not in LABELS:
+        return jsonify({'error': 'Invalid label'}), 400
+        
+    file_path = os.path.join(DATASET_PATH, label, "0.csv")
+    if not os.path.exists(file_path):
+        return jsonify({'error': 'Reference data not found'}), 404
+        
+    try:
+        import csv
+        with open(file_path, 'r') as f:
+            reader = csv.reader(f)
+            landmarks = next(reader)
+            # Convert strings to floats
+            landmarks = [float(x) for x in landmarks]
+        return jsonify({'landmarks': landmarks})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
-    landmarks = []
-    for lm in result.multi_hand_landmarks[0].landmark:
-        landmarks.extend([lm.x, lm.y, lm.z])
-
-    vec = np.array(landmarks, dtype=np.float32).reshape(1, 63)
-
-    interpreter.set_tensor(input_details[0]['index'], vec)
-    interpreter.invoke()
-    output = interpreter.get_tensor(output_details[0]['index'])[0]
-
-    pred = labels[np.argmax(output)]
-    return jsonify({"label": str(pred)})
-
-if __name__ == "__main__":
-    app.run(debug=True)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
