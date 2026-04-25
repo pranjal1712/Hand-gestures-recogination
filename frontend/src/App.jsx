@@ -6,7 +6,7 @@ const Hands = window.Hands;
 if (!Hands) console.error("MediaPipe Hands not found on window");
 if (!window.drawConnectors) console.error("MediaPipe Drawing Utils not found on window");
 
-const API_URL = 'http://localhost:5000/predict';
+const API_URL = '/predict';
 const STABILITY_THRESHOLD = 3;
 const COOLDOWN_TIME = 800; // ms
 const LABELS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'SPACE', 'T', 'U', 'V', 'W', 'X', 'YY', 'Z'];

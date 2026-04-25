@@ -1,36 +1,34 @@
+# --- STAGE 1: Build Frontend ---
+FROM node:18-slim AS build-stage
+WORKDIR /app/frontend
+COPY frontend/package*.json ./
+RUN npm install
+COPY frontend/ ./
+RUN npm run build
+
+# --- STAGE 2: Run Backend ---
 FROM python:3.11-slim
-
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PORT=7860
-
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies for OpenCV/MediaPipe
 RUN apt-get update && apt-get install -y \
-    build-essential \
     libgl1 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install requirements globally as root
+# Install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -U pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Create a non-root user and switch to it for runtime
-RUN useradd -m -u 1000 user
-RUN chown -R user:user /app
-USER user
-ENV HOME=/home/user \
-    PATH=/home/user/.local/bin:$PATH
+# Copy the entire project
+COPY . .
 
-# Copy the rest of the app
-COPY --chown=user . .
+# Copy built frontend from stage 1 to the location Flask expects
+COPY --from=build-stage /app/frontend/dist ./frontend/dist
 
-# Expose port
+# Hugging Face uses port 7860 by default
+ENV PORT=7860
 EXPOSE 7860
 
-# Command to run streamlit
-CMD ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0"]
+# Run Flask on port 7860
+CMD ["python", "flask_app.py"]

@@ -4,8 +4,12 @@ from flask_cors import CORS
 import numpy as np
 import tensorflow as tf
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='frontend/dist', static_url_path='/')
 CORS(app)
+
+@app.route("/")
+def index():
+    return app.send_static_file("index.html")
 
 # Load the TFLite model and allocate tensors.
 interpreter = tf.lite.Interpreter(model_path="model/asl_landmark_model.tflite")
@@ -65,4 +69,5 @@ def get_reference():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
